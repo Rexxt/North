@@ -1,8 +1,8 @@
---[[ 22C - C, Forth and a bunch of other programming languages crossed into one.
-The goal is to write a language similar to Forth, but with "low-level" features like C
+--[[ North - C, Forth and a bunch of other programming languages crossed into one.
+The goal is to write a language similar to Forth, but with "low-level" features like C and some concepts from other languages and other paradigms.
 
 Example program:
-    int NameOfSource:
+    int main:
         "Hello, world!" . (*Here we push "Hello, world!" to the stack and then print it*)
         (*Now we will create an int variable and manipulate it*)
         int let x
@@ -21,12 +21,14 @@ Example program:
 
         (*Now we can create a new variable*)
         str let y
-        y "22C" set
-        y " is awesome!" , (*Concatenates "22C" and " is awesome!" and pushes to stack*)
-        . (*Prints "22C is awesome!" to the console*)
+        y "North" set
+        y " is awesome!" , (*Concatenates "North" and " is awesome!" and pushes to stack*)
+        . (*Prints "North is awesome!" to the console*)
 
         0 (*Here we return 0 by pushing it to the stack*)
     ;;
+
+    main (*Here we execute the main function we created above*)
 ]]
 
 local function split(s, delimiter)
@@ -37,7 +39,7 @@ local function split(s, delimiter)
     return result
 end
 
-local function deep(t)
+local function deep(t) -- deep copy a table
     local new_table = {}
     
     for k, v in pairs(t) do
@@ -63,6 +65,7 @@ local Variable = {
     
     __call = function(self, ...) -- instanciation
         local obj = deep(self)
+        obj.super = self
         obj:__new__(...)
         return obj
     end
@@ -75,18 +78,135 @@ local LanguageContext = {
         self.variables = {}
         self.functions = {
             dup = function(self)
-                table.insert(self.stack, self.stack[-1])
+                table.insert(self.stack, self.stack[#self.stack])
+                return true, nil
+            end,
+            drop = function(self)
+                table.remove(self.stack)
+                return true, nil
+            end,
+            exit = function(self)
+                if #self.stack > 0 then
+                    os.exit(self.get_raw_value(table.remove(self.stack)))
+                else
+                    os.exit(0)
+                end
+            end,
+            ["+"] = function(self)
+                -- check if there are at least 2 elements on the stack
+                if #self.stack < 2 then
+                    return false, {type = "StackUnderflowError", message = "Not enough elements on the stack (expected 2)."}
+                end
+                -- pop two values from stack
+                local b, a = table.remove(self.stack), table.remove(self.stack)
+                if a == nil or b == nil then
+                    return false, {type = "NullOperationError", message = "Attempted to perform operation on null."}
+                end
+                -- add them
+                table.insert(self.stack, a + b)
+                -- register stack change
+                self.stack_changes = self.stack_changes + 1
+                return true, nil
+            end,
+            ["-"] = function(self)
+                -- check if there are at least 2 elements on the stack
+                if #self.stack < 2 then
+                    return false, {type = "StackUnderflowError", message = "Not enough elements on the stack (expected 2)."}
+                end
+                -- pop two values from stack
+                local b, a = table.remove(self.stack), table.remove(self.stack)
+                if a == nil or b == nil then
+                    return false, {type = "NullOperationError", message = "Attempted to perform operation on null."}
+                end
+                -- subtract them
+                table.insert(self.stack, a - b)
+                -- register stack change
+                self.stack_changes = self.stack_changes + 1
+                return true, nil
+            end,
+            ["*"] = function(self)
+                -- check if there are at least 2 elements on the stack
+                if #self.stack < 2 then
+                    return false, {type = "StackUnderflowError", message = "Not enough elements on the stack (expected 2)."}
+                end
+                -- pop two values from stack
+                local b, a = table.remove(self.stack), table.remove(self.stack)
+                if a == nil or b == nil then
+                    return false, {type = "NullOperationError", message = "Attempted to perform operation on null."}
+                end
+                -- multiply them
+                table.insert(self.stack, a * b)
+                -- register stack change
+                self.stack_changes = self.stack_changes + 1
+                return true, nil
+            end,
+            ["/"] = function(self)
+                -- check if there are at least 2 elements on the stack
+                if #self.stack < 2 then
+                    return false, {type = "StackUnderflowError", message = "Not enough elements on the stack (expected 2)."}
+                end
+                -- pop two values from stack
+                local b, a = table.remove(self.stack), table.remove(self.stack)
+                if a == nil or b == nil then
+                    return false, {type = "NullOperationError", message = "Attempted to perform operation on null."}
+                end
+                -- make sure we're not dividing by zero
+                if b == 0 then
+                    return false, {type = "DivisionByZeroError", message = "Attempted to divide by zero."}
+                end
+                -- divide them
+                table.insert(self.stack, a / b)
+                -- register stack change
+                self.stack_changes = self.stack_changes + 1
+                return true, nil
+            end,
+            print = function(self)
+                print(table.remove(self.stack))
+                return true, nil
             end
         }
         self.stack = {}
+        self.stack_changes = 0
     end,
     __call = function(self, ...)
         local obj = deep(self)
+        obj.super = self
         obj:__new__(...)
         return obj
     end,
+
+    get_raw_value = function(str)
+        -- trying to get number
+        local number = tonumber(str)
+        if number then
+            return number
+        end
+        -- trying to get string
+        local s = string.match(str, '^"(.*)"$')
+        if s then
+            return string.sub(s, 1, -2)
+        end
+        -- trying to get boolean
+        if str == 'true' then
+            return true
+        elseif str == 'false' then
+            return false
+        end
+        -- trying to get empty array
+        if str == '[]' then
+            return {}
+        end
+        -- trying to get empty table
+        if str == '#()' then
+            return {}
+        end
+        -- error
+        return nil, 'Could not resolve value ' .. str .. '.'
+    end,
     interpret = function(self, source, code)
         code = string.gsub(code, "    ", "")
+
+        local previous_stack = deep(self.stack)
         
         local lines = split(code, "\n")
         local idx_line = 1
@@ -101,10 +221,57 @@ local LanguageContext = {
                 local word = words[idx_word]
                 
                 -- interpretation goes here
+                -- print("Reading word " .. word)
+
+                -- if word is not empty
+                if word ~= "" then
+                    -- try to see if it is a function
+                    local func = self.functions[word]
+                    if func then
+                        -- if type is function, call it
+                        if type(func) == 'function' then
+                            local status, err = func(self)
+                            if not status then
+                                return false, {
+                                    line = idx_line,
+                                    word = idx_word,
+                                    line_str = line,
+                                    error = {
+                                        type = err.type,
+                                        message = err.message
+                                    }
+                                }
+                            end
+                        end
+                    else
+                        -- try to push value to stack
+                        local value, err = self.get_raw_value(word)
+                        if value then
+                            table.insert(self.stack, value)
+                            self.stack_changes = self.stack_changes + 1
+                        else
+                            -- something went wrong
+                            -- return error
+                            return false, {
+                                line = idx_line,
+                                word = idx_word,
+                                line_str = line,
+                                error = {
+                                    type = "ResolutionError",
+                                    message = err
+                                }
+                            }
+                        end
+                    end
+                end
+
+                idx_word = idx_word + 1
             end
                         
             idx_line = idx_line + 1
         end
+
+        return true, nil
     end
 }
 
