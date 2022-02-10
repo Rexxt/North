@@ -1,4 +1,4 @@
-local LanguageContext = require "22c"
+local LanguageContext = require "north"
 
 local interpreter = LanguageContext()
 
